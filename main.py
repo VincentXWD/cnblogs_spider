@@ -5,7 +5,6 @@ import os, sys, urllib
 import re, random, logging, time
 import Queue, threading, multiprocessing, threadpool
 
-
 USER_NAME = 'kirai'
 TOTAL_PAGE_NUMBER = 0
 INT_REGEXP = re.compile('([\d]+)')
@@ -15,38 +14,26 @@ THREAD_NUMBER = multiprocessing.cpu_count() * 2
 ARTICLE_URLS_MUTEX = threading.Lock()
 ARTICLE_URLS = []
 
-class KiraiManager(BaseManager):
-	pass
-
-
 class ListWithLinkExtend(list):
 	def extend(self, value):
 		super(ListWithLinkExtend, self).extend(value)
 		return self
-
 
 def get_total_page_number():
 	doc = PyQuery(url=BASE_URL)
 	return int(INT_REGEXP.findall(
 		doc.find('.pager .Pager').text())[0].encode('ascii'))
 
-
 def get_page_url():
 	global TOTAL_PAGE_NUMBER
 	return map(lambda page: BASE_URL+str(page),
 						 [i for i in range(1, TOTAL_PAGE_NUMBER+1)])
-
-
-TOTAL_PAGE_NUMBER = get_total_page_number()
-PAGE_URLS = get_page_url()
-
 
 def get_article_url(idx):
 	url = PAGE_URLS[idx]
 	doc = PyQuery(url=url)
 	article_urls = ARTICLE_REGEXP.findall(str(doc.find('.PostList .postTitl2')))
 	return article_urls
-
 
 def handle_result(request, result):
 	global ARTICLE_URLS_MUTEX, ARTICLE_URLS
@@ -55,7 +42,6 @@ def handle_result(request, result):
 		ARTICLE_URLS.append(result)
 	finally:
 		ARTICLE_URLS_MUTEX.release()
-
 
 def cluster_process():
 	global ARTICLE_URLS
@@ -74,7 +60,6 @@ def cluster_process():
 def get_article(url):
 	html = urllib.urlopen(url).read()
 	return html, INT_REGEXP.findall(url)[0]
-
 
 def save_article(request, result):
 	content = result[0]
@@ -95,9 +80,13 @@ def thread_process():
 	thread_pool.wait()
 
 def __main__(argv):
-	global ARTICLE_URLS, TOTAL_PAGE_NUMBER, USER_NAME
+	global ARTICLE_URLS, TOTAL_PAGE_NUMBER, USER_NAME, BASE_URL, ARTICLE_REGEXP, PAGE_URLS, TOTAL_PAGE_NUMBER
 	if len(argv) == 2:
 		USER_NAME = argv[1]
+	BASE_URL = 'http://www.cnblogs.com/'+USER_NAME+'/p/?page='
+	ARTICLE_REGEXP = re.compile('href=\"(http://www.cnblogs.com/'+USER_NAME+'/p/[\d]+.html)\"')
+	TOTAL_PAGE_NUMBER = get_total_page_number()
+	PAGE_URLS = get_page_url()
 	thread_pool = threadpool.ThreadPool(THREAD_NUMBER)
 	requests = threadpool.makeRequests(
 		get_article_url,
