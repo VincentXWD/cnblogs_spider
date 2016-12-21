@@ -4,15 +4,23 @@ from pyquery import PyQuery
 import os, sys, urllib
 import re, random, logging, time
 import Queue, threading, multiprocessing, threadpool
+import pymongo
 
 USER_NAME = 'kirai'
 TOTAL_PAGE_NUMBER = 0
 INT_REGEXP = re.compile('([\d]+)')
 BASE_URL = 'http://www.cnblogs.com/'+USER_NAME+'/p/?page='
 ARTICLE_REGEXP = re.compile('href=\"(http://www.cnblogs.com/'+USER_NAME+'/p/[\d]+.html)\"')
-THREAD_NUMBER = multiprocessing.cpu_count() * 2
+THREAD_NUMBER = multiprocessing.cpu_count() * 4
 ARTICLE_URLS_MUTEX = threading.Lock()
 ARTICLE_URLS = []
+
+MONGO_SERVER_ADDRESS = 'localhost'
+MONGO_MUTEX = threading.Lock()
+conn = pymongo.MongoClient(host=MONGO_SERVER_ADDRESS)
+db = conn.cnblogs
+col = db.articles
+
 
 class ListWithLinkExtend(list):
 	def extend(self, value):
@@ -29,13 +37,13 @@ def get_page_url():
 	return map(lambda page: BASE_URL+str(page),
 						 [i for i in range(1, TOTAL_PAGE_NUMBER+1)])
 
-def get_article_url(idx):
+def read_page_urls(idx):
 	url = PAGE_URLS[idx]
 	doc = PyQuery(url=url)
 	article_urls = ARTICLE_REGEXP.findall(str(doc.find('.PostList .postTitl2')))
 	return article_urls
 
-def handle_result(request, result):
+def get_article_url(request, result):
 	global ARTICLE_URLS_MUTEX, ARTICLE_URLS
 	try:
 		ARTICLE_URLS_MUTEX.acquire()
@@ -54,7 +62,7 @@ def cluster_process():
 	manager = KiraiManager(address=('', 6969), authkey='whosyourdaddy')
 	manager.start()
 	manager.shutdown()
-	# article_flag, article_urls = get_article_url()
+	# article_flag, article_urls = read_page_urls()
 
 # a simple way.
 def get_article(url):
@@ -62,41 +70,39 @@ def get_article(url):
 	return html, INT_REGEXP.findall(url)[0]
 
 def save_article(request, result):
+	id = result[1]
 	content = result[0]
-	file_name = result[1]
-	path = './' + USER_NAME + '/' + file_name + '.html'
-	try:
-		fp = file(path, 'w')
-		fp.writelines(content)
-	finally:
-		fp.close()
+	col.insert({'id':id, 'user':USER_NAME, 'content':content})
 
-def thread_process():
+def get_articles():
 	global ARTICLE_URLS
-	os.mkdir(USER_NAME)
 	thread_pool = threadpool.ThreadPool(THREAD_NUMBER)
 	requests = threadpool.makeRequests(get_article, ARTICLE_URLS, save_article)
 	[thread_pool.putRequest(req) for req in requests]
 	thread_pool.wait()
 
+def get_article_urls():
+	global ARTICLE_URLS
+	thread_pool = threadpool.ThreadPool(THREAD_NUMBER)
+	requests = threadpool.makeRequests(
+		read_page_urls,
+		[i for i in range(0, TOTAL_PAGE_NUMBER)],
+		get_article_url)
+	[thread_pool.putRequest(req) for req in requests]
+	thread_pool.wait()
+	ARTICLE_URLS = list(reduce(lambda a, b: ListWithLinkExtend(a).extend(ListWithLinkExtend(b)),
+														 ARTICLE_URLS))
+
 def __main__(argv):
-	global ARTICLE_URLS, TOTAL_PAGE_NUMBER, USER_NAME, BASE_URL, ARTICLE_REGEXP, PAGE_URLS, TOTAL_PAGE_NUMBER
+	global TOTAL_PAGE_NUMBER, USER_NAME, BASE_URL, ARTICLE_REGEXP, PAGE_URLS, TOTAL_PAGE_NUMBER
 	if len(argv) == 2:
 		USER_NAME = argv[1]
 	BASE_URL = 'http://www.cnblogs.com/'+USER_NAME+'/p/?page='
 	ARTICLE_REGEXP = re.compile('href=\"(http://www.cnblogs.com/'+USER_NAME+'/p/[\d]+.html)\"')
 	TOTAL_PAGE_NUMBER = get_total_page_number()
 	PAGE_URLS = get_page_url()
-	thread_pool = threadpool.ThreadPool(THREAD_NUMBER)
-	requests = threadpool.makeRequests(
-		get_article_url,
-		[i for i in range(0, TOTAL_PAGE_NUMBER)],
-		handle_result)
-	[thread_pool.putRequest(req) for req in requests]
-	thread_pool.wait()
-	ARTICLE_URLS = list(reduce(lambda a, b: ListWithLinkExtend(a).extend(ListWithLinkExtend(b)),
-														 ARTICLE_URLS))
-	thread_process()
+	get_article_urls()
+	get_articles()
 
 if __name__ == '__main__':
 	__main__(sys.argv)
